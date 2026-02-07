@@ -174,51 +174,31 @@ def gradient_descent(oracle, x_0, tolerance=1e-5, max_iter=10000,
     >> print('Found optimal point: {}'.format(x_opt))
        Found optimal point: [ 0.  1.  2.  3.  4.]
     """
-    history = {'func': [], 'grad_norm': [], 'x': []} if trace else None
+    history = defaultdict(list) if trace else None
+    history['x'] = []
+    history['func'] = []
+    history['grad_norm'] = []
     line_search_tool = get_line_search_tool(line_search_options)
     x_k = np.copy(x_0)
-
-    # TODO: Implement gradient descent
-    # Use line_search_tool.line_search() for adaptive step size.
-    start_time = datetime.now()
-
-    grad_0 = oracle.grad(x_k)
-    grad_norm_0_sq = np.linalg.norm(grad_0) ** 2
-
+    d_k = - oracle.grad(x_k)
+    grad_norm_0 = d_k @ d_k
+    previous_alpha = 1.0
+    history['x'].append(x_k)
+    history['func'].append(oracle.func(x_k))
+    history['grad_norm'].append(grad_norm_0)
     for k in range(max_iter):
-        grad_k = oracle.grad(x_k)
-        grad_norm_sq = np.linalg.norm(grad_k) ** 2
-
-        # критерий остановки
-        if grad_norm_sq <= tolerance * grad_norm_0_sq:
-            return x_k, 'success', history
-
-        # логирование
-        if trace:
-            history['time'].append((datetime.now() - start_time).total_seconds())
-            history['func'].append(oracle.func(x_k))
-            history['grad_norm'].append(np.sqrt(grad_norm_sq))
-            if x_k.size <= 2:
-                history['x'].append(x_k.copy())
-
-        # направление спуска
-        d_k = -grad_k
-
-        # подбор шага
-        alpha = line_search_tool.line_search(oracle, x_k, d_k)
-        if alpha is None or not np.isfinite(alpha):
-            return x_k, 'computational_error', history
-
-        # обновление
+        d_k = - oracle.grad(x_k)
+        alpha = line_search_tool.line_search(oracle, x_k, d_k, previous_alpha)
         x_k = x_k + alpha * d_k
-
-        if not np.all(np.isfinite(x_k)):
-            return x_k, 'computational_error', history
-
-        if display:
-            print(f'iter={k}, f={oracle.func(x_k):.6e}, ||grad||={np.sqrt(grad_norm_sq):.6e}')
-
-    return x_k, 'success', history
+        #grad_norm = np.linalg.norm(d_k)**2
+        grad_norm = d_k @ d_k
+        previous_alpha = alpha
+        history['func'].append(oracle.func(x_k))
+        history['x'].append(x_k)
+        history['grad_norm'].append(grad_norm)
+        if grad_norm <= tolerance * grad_norm_0:
+            return x_k, 'success', history
+    return x_k, 'iterations_exceeded', history
 
 
 def newton(oracle, x_0, tolerance=1e-5, max_iter=100,
@@ -271,7 +251,7 @@ def newton(oracle, x_0, tolerance=1e-5, max_iter=100,
     >> print('Found optimal point: {}'.format(x_opt))
        Found optimal point: [ 0.  1.  2.  3.  4.]
     """
-    history = {'func': [], 'grad_norm': [], 'x': []} if trace else None
+    history = defaultdict(list) if trace else None
     line_search_tool = get_line_search_tool(line_search_options)
     x_k = np.copy(x_0)
 

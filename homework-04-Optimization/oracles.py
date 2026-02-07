@@ -101,11 +101,7 @@ class LogRegL2Oracle(BaseSmoothOracle):
         s = expit(z)
         s = s * (1 - s)
         n = len(x)
-        H = 1 / m * self.matmat_ATsA(s)
-        if scipy.sparse.issparse(H):
-            H = H.toarray()
-        return H + self.regcoef * np.eye(n)
-
+        return 1 / m * self.matmat_ATsA(s) + self.regcoef * scipy.sparse.identity(n)
 
 class LogRegL2OptimizedOracle(LogRegL2Oracle):
     """
@@ -142,7 +138,7 @@ def create_log_reg_oracle(A, b, regcoef, oracle_type='usual'):
     """
     matvec_Ax = lambda x: A @ x  
     matvec_ATx = lambda x: A.T @ x
-    matmat_ATsA = lambda s: A.T @ diags(s) @ A
+    matmat_ATsA = lambda s: (A.T * s) @ A
 
     if oracle_type == 'usual':
         oracle = LogRegL2Oracle
