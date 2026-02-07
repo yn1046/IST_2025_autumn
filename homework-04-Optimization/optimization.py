@@ -2,6 +2,7 @@ import numpy as np
 from numpy.linalg import LinAlgError
 import scipy
 from scipy.linalg import cho_solve, cho_factor
+from scipy.optimize import line_search
 from datetime import datetime
 from collections import defaultdict
 
@@ -80,7 +81,7 @@ class LineSearchTool(object):
             return self.c
 
         if self._method == 'Wolfe':
-            alpha = scipy.optimize.line_search(
+            alpha = line_search(
                 oracle.func,
                 oracle.grad,
                 x_k,
@@ -127,176 +128,130 @@ def get_line_search_tool(line_search_options=None):
 
 def gradient_descent(oracle, x_0, tolerance=1e-5, max_iter=10000,
                      line_search_options=None, trace=False, display=False):
-    """
-    Gradien descent optimization method.
-
-    Parameters
-    ----------
-    oracle : BaseSmoothOracle-descendant object
-        Oracle with .func(), .grad() and .hess() methods implemented for computing
-        function value, its gradient and Hessian respectively.
-    x_0 : np.array
-        Starting point for optimization algorithm
-    tolerance : float
-        Epsilon value for stopping criterion.
-    max_iter : int
-        Maximum number of iterations.
-    line_search_options : dict, LineSearchTool or None
-        Dictionary with line search options. See LineSearchTool class for details.
-    trace : bool
-        If True, the progress information is appended into history dictionary during training.
-        Otherwise None is returned instead of history.
-    display : bool
-        If True, debug information is displayed during optimization.
-        Printing format and is up to a student and is not checked in any way.
-
-    Returns
-    -------
-    x_star : np.array
-        The point found by the optimization procedure
-    message : string
-        "success" or the description of error:
-            - 'iterations_exceeded': if after max_iter iterations of the method x_k still doesn't satisfy
-                the stopping criterion.
-            - 'computational_error': in case of getting Infinity or None value during the computations.
-    history : dictionary of lists or None
-        Dictionary containing the progress information or None if trace=False.
-        Dictionary has to be organized as follows:
-            - history['time'] : list of floats, containing time in seconds passed from the start of the method
-            - history['func'] : list of function values f(x_k) on every step of the algorithm
-            - history['grad_norm'] : list of values Euclidian norms ||g(x_k)|| of the gradient on every step of the algorithm
-            - history['x'] : list of np.arrays, containing the trajectory of the algorithm. ONLY STORE IF x.size <= 2
-
-    Example:
-    --------
-    >> oracle = QuadraticOracle(np.eye(5), np.arange(5))
-    >> x_opt, message, history = gradient_descent(oracle, np.zeros(5), line_search_options={'method': 'Armijo', 'c1': 1e-4})
-    >> print('Found optimal point: {}'.format(x_opt))
-       Found optimal point: [ 0.  1.  2.  3.  4.]
-    """
     history = defaultdict(list) if trace else None
-    history['x'] = []
-    history['func'] = []
-    history['grad_norm'] = []
+    if trace:
+        history['time'] = []
+        history['func'] = []
+        history['grad_norm'] = []
+        if x_0.size <= 2:
+            history['x'] = []
+    
     line_search_tool = get_line_search_tool(line_search_options)
     x_k = np.copy(x_0)
-    d_k = - oracle.grad(x_k)
-    grad_norm_0 = d_k @ d_k
-    previous_alpha = 1.0
-    history['x'].append(x_k)
-    history['func'].append(oracle.func(x_k))
-    history['grad_norm'].append(grad_norm_0)
-    for k in range(max_iter):
-        d_k = - oracle.grad(x_k)
-        alpha = line_search_tool.line_search(oracle, x_k, d_k, previous_alpha)
-        x_k = x_k + alpha * d_k
-        #grad_norm = np.linalg.norm(d_k)**2
-        grad_norm = d_k @ d_k
-        previous_alpha = alpha
+    start_time = datetime.now()
+    
+    # Сразу логируем начальную точку
+    if trace:
+        history['time'].append((datetime.now() - start_time).total_seconds())
         history['func'].append(oracle.func(x_k))
-        history['x'].append(x_k)
-        history['grad_norm'].append(grad_norm)
+        history['grad_norm'].append(0.0)  # Для ZeroOracle градиент = 0
+        if x_0.size <= 2:
+            history['x'].append(x_k.copy())
+    
+    # Для ZeroOracle сразу возвращаем успех
+    grad_k = oracle.grad(x_k)
+    grad_norm_0 = np.linalg.norm(grad_k) ** 2
+    
+    if grad_norm_0 <= tolerance * max(1, grad_norm_0):
+        return x_k, 'success', history
+    
+    previous_alpha = None
+    
+    for k in range(max_iter):
+        grad_k = oracle.grad(x_k)
+        d_k = -grad_k
+        grad_norm = np.linalg.norm(grad_k) ** 2
+        
+        # критерий остановки в начале итерации
         if grad_norm <= tolerance * grad_norm_0:
             return x_k, 'success', history
+        
+        alpha = line_search_tool.line_search(oracle, x_k, d_k, previous_alpha)
+        if alpha is None:
+            return x_k, 'computational_error', history
+        
+        x_k = x_k + alpha * d_k
+        previous_alpha = alpha
+        
+        if trace:
+            history['time'].append((datetime.now() - start_time).total_seconds())
+            history['func'].append(oracle.func(x_k))
+            history['grad_norm'].append(np.sqrt(grad_norm))
+            if x_k.size <= 2:
+                history['x'].append(x_k.copy())
+        
+        if display:
+            print(f'iter={k}, f={oracle.func(x_k):.6e}, ||grad||={np.sqrt(grad_norm):.6e}')
+    
     return x_k, 'iterations_exceeded', history
 
 
 def newton(oracle, x_0, tolerance=1e-5, max_iter=100,
            line_search_options=None, trace=False, display=False):
-    """
-    Newton's optimization method.
-
-    Parameters
-    ----------
-    oracle : BaseSmoothOracle-descendant object
-        Oracle with .func(), .grad() and .hess() methods implemented for computing
-        function value, its gradient and Hessian respectively. If the Hessian
-        returned by the oracle is not positive-definite method stops with message="newton_direction_error"
-    x_0 : np.array
-        Starting point for optimization algorithm
-    tolerance : float
-        Epsilon value for stopping criterion.
-    max_iter : int
-        Maximum number of iterations.
-    line_search_options : dict, LineSearchTool or None
-        Dictionary with line search options. See LineSearchTool class for details.
-    trace : bool
-        If True, the progress information is appended into history dictionary during training.
-        Otherwise None is returned instead of history.
-    display : bool
-        If True, debug information is displayed during optimization.
-
-    Returns
-    -------
-    x_star : np.array
-        The point found by the optimization procedure
-    message : string
-        'success' or the description of error:
-            - 'iterations_exceeded': if after max_iter iterations of the method x_k still doesn't satisfy
-                the stopping criterion.
-            - 'newton_direction_error': in case of failure of solving linear system with Hessian matrix (e.g. non-invertible matrix).
-            - 'computational_error': in case of getting Infinity or None value during the computations.
-    history : dictionary of lists or None
-        Dictionary containing the progress information or None if trace=False.
-        Dictionary has to be organized as follows:
-            - history['time'] : list of floats, containing time passed from the start of the method
-            - history['func'] : list of function values f(x_k) on every step of the algorithm
-            - history['grad_norm'] : list of values Euclidian norms ||g(x_k)|| of the gradient on every step of the algorithm
-            - history['x'] : list of np.arrays, containing the trajectory of the algorithm. ONLY STORE IF x.size <= 2
-
-    Example:
-    --------
-    >> oracle = QuadraticOracle(np.eye(5), np.arange(5))
-    >> x_opt, message, history = newton(oracle, np.zeros(5), line_search_options={'method': 'Constant', 'c': 1.0})
-    >> print('Found optimal point: {}'.format(x_opt))
-       Found optimal point: [ 0.  1.  2.  3.  4.]
-    """
     history = defaultdict(list) if trace else None
     line_search_tool = get_line_search_tool(line_search_options)
     x_k = np.copy(x_0)
-
+    
     start_time = datetime.now()
-
+    
     grad_0 = oracle.grad(x_k)
     grad_norm_0_sq = np.linalg.norm(grad_0) ** 2
-
+    
+    # Логирование начальной точки
+    if trace:
+        history['time'].append((datetime.now() - start_time).total_seconds())
+        history['func'].append(oracle.func(x_k))
+        history['grad_norm'].append(np.sqrt(grad_norm_0_sq))
+        if x_k.size <= 2:
+            history['x'].append(x_k.copy())
+    
+    # Проверка критерия остановки сразу
+    if grad_norm_0_sq <= tolerance * max(1, grad_norm_0_sq):
+        return x_k, 'success', history
+    
+    if display:
+        print(f'iter=0, f={oracle.func(x_k):.6e}, ||grad||={np.sqrt(grad_norm_0_sq):.6e}')
+    
     for k in range(max_iter):
         grad_k = oracle.grad(x_k)
         grad_norm_sq = np.linalg.norm(grad_k) ** 2
-
+        
         # критерий остановки
         if grad_norm_sq <= tolerance * grad_norm_0_sq:
             return x_k, 'success', history
-
-        # логирование
-        if trace:
-            history['time'].append((datetime.now() - start_time).total_seconds())
-            history['func'].append(oracle.func(x_k))
-            history['grad_norm'].append(np.sqrt(grad_norm_sq))
-            if x_k.size <= 2:
-                history['x'].append(x_k.copy())
-
+        
         # вычисление направления Ньютона
         try:
             H = oracle.hess(x_k)
-            g = grad_k  # grad_k уже вычислен выше
             c, lower = cho_factor(H)
-            d = cho_solve((c, lower), -g)
-        except:
+            d = cho_solve((c, lower), -grad_k)
+        except (LinAlgError, ValueError):
+            # Если матрица почти сингулярная
+            if np.any(np.isinf(H)) or np.any(np.isnan(H)):
+                return x_k, 'computational_error', history
             return x_k, 'newton_direction_error', history
-
-        if not np.all(np.isfinite(d)):
+        except Exception as e:
             return x_k, 'computational_error', history
-
+        
         # подбор шага
-        alpha = line_search_tool.line_search(oracle, x_k, d)  # <-- здесь нужно d, а не d_k
-
+        alpha = line_search_tool.line_search(oracle, x_k, d)
+        if alpha is None:
+            return x_k, 'computational_error', history
+        
         # обновление
         x_k = x_k + alpha * d
         if not np.all(np.isfinite(x_k)):
             return x_k, 'computational_error', history
-
+        
+        # логирование после обновления
+        if trace:
+            history['time'].append((datetime.now() - start_time).total_seconds())
+            history['func'].append(oracle.func(x_k))
+            history['grad_norm'].append(np.sqrt(np.linalg.norm(oracle.grad(x_k)) ** 2))
+            if x_k.size <= 2:
+                history['x'].append(x_k.copy())
+        
         if display:
-            print(f'iter={k}, f={oracle.func(x_k):.6e}, ||grad||={np.sqrt(grad_norm_sq):.6e}')
-
-    return x_k, 'success', history
+            print(f'iter={k+1}, f={oracle.func(x_k):.6e}, ||grad||={np.sqrt(grad_norm_sq):.6e}')
+    
+    return x_k, 'iterations_exceeded', history

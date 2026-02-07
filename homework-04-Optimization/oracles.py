@@ -104,28 +104,20 @@ class LogRegL2Oracle(BaseSmoothOracle):
         return 1 / m * self.matmat_ATsA(s) + self.regcoef * scipy.sparse.identity(n)
 
 class LogRegL2OptimizedOracle(LogRegL2Oracle):
-    """
-    Oracle for logistic regression with l2 regularization
-    with optimized *_directional methods (are used in line_search).
-
-    For explanation see LogRegL2Oracle.
-    """
     def __init__(self, matvec_Ax, matvec_ATx, matmat_ATsA, b, regcoef):
         super().__init__(matvec_Ax, matvec_ATx, matmat_ATsA, b, regcoef)
-
+    
     def func_directional(self, x, d, alpha):
         Ax = self.matvec_Ax(x)
         Ad = self.matvec_Ax(d)
         z = (Ax + alpha * Ad) * self.b
         return np.log1p(np.exp(-z)).mean() + 0.5 * self.regcoef * np.dot(x + alpha * d, x + alpha * d)
-
-
+    
     def grad_directional(self, x, d, alpha):
         Ax = self.matvec_Ax(x)
         Ad = self.matvec_Ax(d)
         z = (Ax + alpha * Ad) * self.b
         s = expit(z)
-        # В оптимизированной версии мы можем считать скалярное произведение прямо:
         return ((s - 1) * self.b).dot(Ad) / len(self.b) + self.regcoef * (x + alpha * d).dot(d)
 
 
@@ -138,17 +130,26 @@ def create_log_reg_oracle(A, b, regcoef, oracle_type='usual'):
     """
     matvec_Ax = lambda x: A @ x  
     matvec_ATx = lambda x: A.T @ x
-    matmat_ATsA = lambda s: (A.T * s) @ A
+    
+    # Исправленная реализация matmat_ATsA
+    if scipy.sparse.issparse(A):
+        def matmat_ATsA(s):
+            # Для sparse матриц: A.T @ diag(s) @ A
+            # Возвращаем dense массив для совместимости с тестами
+            return (A.T @ diags(s) @ A).toarray()
+    else:
+        def matmat_ATsA(s):
+            # Для dense матриц: A.T @ diag(s) @ A
+            return A.T @ np.diag(s) @ A
 
     if oracle_type == 'usual':
         oracle = LogRegL2Oracle
     elif oracle_type == 'optimized':
         oracle = LogRegL2OptimizedOracle
     else:
-        raise 'Unknown oracle_type=%s' % oracle_type
+        raise ValueError('Unknown oracle_type=%s' % oracle_type)
+    
     return oracle(matvec_Ax, matvec_ATx, matmat_ATsA, b, regcoef)
-
-
 
 def grad_finite_diff(func, x, eps=1e-8):
     x = np.asarray(x, dtype=float)
